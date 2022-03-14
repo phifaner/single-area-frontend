@@ -1,0 +1,201 @@
+// import { legend } from "@d3/color-legend";
+import React from 'react';
+import PropTypes from 'prop-types';
+import Typography from '@material-ui/core/Typography';
+import { Paper } from '@material-ui/core';
+import { withStyles } from '@material-ui/styles';
+import * as d3 from 'd3';
+import { fetch as fetchPolyfill } from 'whatwg-fetch';
+// import getCellCount from 'src/components/DBConnect';
+
+const fetch = require('d3-fetch');
+
+const minValue = 700;
+const maxValue = 13512;
+const countDay = (d) => d.getUTCDay();
+const timeWeek = d3.utcSunday;
+const formatDay = (d) => ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'][d.getUTCDay()];
+const colorFn = d3.scaleSequential(d3.interpolateBuGn).domain([
+  Math.floor(minValue),
+  Math.ceil(maxValue)
+]);
+
+const useStyles = (theme) => ({
+  root: {
+    backgroundColor: theme.palette.background.dark,
+    minHeight: '100%',
+    paddingBottom: theme.spacing(1),
+    paddingTop: theme.spacing(2),
+    borderColor: 'grey.500',
+    border: 1,
+    padding: '0px'
+  }
+});
+
+class ColorMap extends React.Component {
+  constructor() {
+    super();
+    this.state = {
+      // dataIsReturned: false
+    };
+    this.myRef = React.createRef();
+    this.minValue = 999;
+    this.maxValue = 0;
+    this.dateValues = null;
+  }
+
+  componentDidMount() {
+    // getCellCount();
+    fetchPolyfill().then(async () => {
+      const obj = await fetch.csv('http://localhost:3000/data/stackoverflow.csv');
+      this.dateValues = obj.map((dv) => ({
+        date: d3.timeDay(new Date(dv.date)),
+        value: Number(dv.AnswerCount)
+      }));
+      this.dateValues.sort((a, b) => new Date(a.Date) - new Date(b.Date));
+      // this.setState({ dataIsReturned: true });
+      this.drawMap();
+    }).catch((err) => console.error(err));
+  }
+
+  drawMap() {
+    const cellSize = 5;
+    const yearHeight = cellSize * 7 + 5;
+    const yearWidth = 128;
+    const years = d3.group(this.dateValues, (d) => {
+      return d.date.getUTCFullYear();
+    });
+    const svg = d3.select(this.myRef.current)
+      .append('svg')
+      .attr('viewBox', [0, 0, yearWidth, yearHeight * years.size + 20])
+      .attr('font-family', 'sans-serif')
+      .attr('font-size', 3);
+    const year = svg.selectAll('g')
+      .data(years)
+      .join('g')
+      .attr('transform', (d, i) => `translate(40, ${yearHeight * i + cellSize * 1.5})`);
+    year.append('text')
+      .attr('x', -5)
+      .attr('y', -30)
+      .attr('text-anchor', 'end')
+      .attr('font-size', 8)
+      // .attr('font-weight', 55)
+      .attr('transform', 'rotate(270)')
+      .text((d) => d[0]);
+    year.append('g')
+      .attr('text-anchor', 'end')
+      .selectAll('text')
+      .data(d3.range(7).map((i) => new Date(1999, 0, i)))
+      .join('text')
+      .attr('x', -5)
+      .attr('y', (d) => (countDay(d) + 0.5) * cellSize)
+      .attr('dy', '0.31em')
+      .attr('font-size', 3)
+      .text(formatDay);
+    year.append('g')
+      .selectAll('rect')
+      .data((d) => d[1])
+      .join('rect')
+      .attr('width', cellSize - 1.5)
+      .attr('height', cellSize - 1.5)
+      .attr('x', (d) => {
+        return timeWeek.count(d3.utcYear(d.date), d.date) * cellSize + 10;
+      })
+      .attr('y', (d) => countDay(d.date) * cellSize + 0.5)
+      .attr('fill', (d) => colorFn(d.value));
+
+    // display legennd
+    const legend = svg.append('g')
+      .attr('transform', `translate(10, ${years.size * yearHeight + cellSize * 2})`);
+    const categoriesCount = 10;
+    const legendWidth = 15;
+
+    const categories = [...Array(categoriesCount)].map((_, i) => {
+      const upperBound = (maxValue / categoriesCount) * (i + 1);
+      const lowerBound = (maxValue / categoriesCount) * i;
+
+      return {
+        upperBound,
+        lowerBound,
+        color: d3.interpolateBuGn(upperBound / maxValue)
+      };
+    });
+
+    function toggle(leg) {
+      const { lowerBound, upperBound, selected } = leg;
+
+      leg.selected = !selected;
+      const highlightedDates = [];
+      years.forEach((value, key) => {
+        highlightedDates.push({
+          key,
+          values: value.filter(
+            (v) => v.value > lowerBound && v.value <= upperBound
+          )
+        });
+      });
+
+      year
+        .data(highlightedDates)
+        .selectAll('rect')
+        .data((d) => d.values, (d) => d.date)
+        .transition()
+        .duration(500)
+        .attr('fill', (d) => {
+          return leg.selected ? colorFn(d.value) : 'white';
+        });
+    }
+
+    legend
+      .selectAll('rect')
+      .data(categories)
+      .enter()
+      .append('rect')
+      .attr('fill', (d) => d.color)
+      .attr('x', (d, i) => legendWidth * i)
+      .attr('width', legendWidth)
+      .attr('height', 5)
+      .on('click', (e, d) => {
+        toggle(d);
+      });
+
+    // legend
+    //   .selectAll('text')
+    //   .data(categories)
+    //   .join('text')
+    //   .attr('transform', 'rotate(90)')
+    //   .attr('y', (d, i) => -legendWidth * i)
+    //   .attr('dy', -30)
+    //   .attr('x', 18)
+    //   .attr('text-anchor', 'start')
+    //   .attr('font-size', 4)
+    //   .text((d) => `${d.lowerBound.toFixed(2)} - ${d.upperBound.toFixed(2)}`);
+
+    // legend
+    //   .append('text')
+    //   .attr('dy', -5)
+    //   .attr('font-size', 4)
+    //   .attr('text-decoration', 'underline')
+    //   .text('Click on category to select/deselect days');
+  }
+
+  render() {
+    // const { dataIsReturned } = this.state;
+    const { classes } = this.props;
+    // dataIsReturned ? : <h1>Loading</h1>;
+    return (
+      <Paper variant="outlined" className={classes.root}>
+        <Typography id="discrete-slider">
+          Yearly Pattern
+        </Typography>
+        <div className={classes.root} ref={this.myRef} />
+      </Paper>
+    );
+  }
+}
+
+ColorMap.propTypes = {
+  classes: PropTypes.object.isRequired,
+};
+
+export default withStyles(useStyles)(ColorMap);

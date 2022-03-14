@@ -1,0 +1,247 @@
+import React from 'react';
+import mapboxgl from 'mapbox-gl';
+import * as d3 from 'd3';
+import {
+  point, featureCollection, bbox, voronoi
+} from '@turf/turf';
+import PropTypes from 'prop-types';
+import { fetch as fetchPolyfill } from 'whatwg-fetch';
+import { withStyles } from '@material-ui/styles';
+
+const useStyles = (theme) => ({
+  root: {
+    backgroundColor: theme.palette.background.dark,
+    minHeight: '100%',
+    paddingBottom: '8px',
+    paddingTop: '24px'
+  },
+  mapContainer: {
+    top: 0,
+    right: 0,
+    left: 0,
+    bottom: 0
+  }
+});
+
+// function drawLines(map, tracks) {
+//   const { layers } = map.getStyle().layers;
+//   layers.forEach((l) => {
+//     if (l.id.substr(0, 5) === 'route') {
+//       map.removeLayer(l.id);
+//       map.removeSource(l.id);
+//     }
+//   });
+
+//   tracks.forEach((elem, i) => {
+//     const myCoordinates = [];
+//     elem.points.forEach((p) => {
+//       if (p !== undefined) myCoordinates.push([p.lon, p.lat]);
+//     });
+//     map.addSource(`route_${i}`, {
+//       type: 'geojson',
+//       data: {
+//         type: 'Feature',
+//         properties: {},
+//         geometry: {
+//           type: 'LineString',
+//           coordinates: myCoordinates,
+//         },
+//       },
+//     });
+
+//     map.addLayer({
+//       id: `route_${i}`,
+//       type: 'line',
+//       source: `route_${i}`,
+//       layout: {
+//         'line-join': 'round',
+//         'line-cap': 'round'
+//       },
+//       paint: {
+//         'line-color': '#888',
+//         'line-width': elem.count / 4
+//         // 'line-width': Math.log2(elem.count)
+//       }
+//     });
+//   });
+// }
+
+const MAPBOX_TOKEN = 'pk.eyJ1IjoicGhpZmFuZXIiLCJhIjoiYzg0NGY4MDlhNjRlNzYwN2FlYTQwNWRiMzNmMzg5NjgifQ.2s5hwBusHP3st3t8pnEu7A';
+mapboxgl.accessToken = MAPBOX_TOKEN;
+
+class MapPage extends React.Component {
+  constructor(props) {
+    super(props);
+    this.mapRef = null;
+    this.state = {
+      // voronoiPolygons: null,
+      // trackMap: null,
+      // cells: null,
+      voronoiDraw: false,
+      latitude: 28.01,
+      longitude: 120.65,
+      zoom: 14,
+      bearing: 0,
+      pitch: 0
+    };
+  }
+
+  // load data and prepare for generating voronoi polygon
+  componentDidMount() {
+    fetchPolyfill().then(async () => {
+      const features = [];
+      // const cells = [];
+      const cellMap = new Map(); // store cell: loc
+      const trackMap = new Map(); // all tracks included in a cell
+      let options = {};
+      let ttcVoronoi = [];
+      const data = await d3.csv('http://localhost:3000/data/bs_wz_full.csv');
+      data.forEach((element, i) => {
+        if (element.lon !== '' && element.lat !== '') {
+          const x = parseFloat(element.lon);
+          const y = parseFloat(element.lat);
+          cellMap.set(+element.cell, { lon: x, lat: y });
+          if (x > 120.5419 && x < 120.9817 && y > 27.904 && y < 28.075 && i < 30) {
+            features.push(point([x, y]));
+            // cells.push(+element.cell);
+          }
+        }
+      });
+
+      ttcVoronoi = featureCollection(features);
+      const extent = bbox(ttcVoronoi);
+
+      options = {
+        bbox: extent
+      };
+
+      const _tracks = await d3.json('http://localhost:3000/data/count_wz_0201.json');
+      _tracks.map((element) => {
+        const firstCell = +element.points[0];
+        const count = +element.count;
+        const points = element.points.map((e) => cellMap.get(+e));
+        const j = { count, points };
+        let v = [];
+        if (trackMap.has(firstCell)) {
+          v = trackMap.get(firstCell);
+        }
+        v.push(j);
+        trackMap.set(firstCell, v);
+        return trackMap;
+      });
+
+      const voronoiPolygons = voronoi(ttcVoronoi, options);
+
+      const {
+        longitude, latitude, zoom, bearing, pitch
+      } = this.state;
+      const map = new mapboxgl.Map({
+        container: this.mapContainer,
+        style: 'mapbox://styles/mapbox/streets-v11',
+        center: [longitude, latitude],
+        zoom,
+        bearing,
+        pitch
+      });
+      map.on('load', () => {
+        let { voronoiDraw } = this.state;
+        if (voronoiDraw === false) {
+          voronoiDraw = true;
+          map.addLayer({
+            id: 'voronoi',
+            type: 'fill',
+            source: {
+              type: 'geojson',
+              data: voronoiPolygons
+            },
+            layout: {},
+            paint: {
+              'fill-color': 'rgba(0,0,0,0)',
+              'fill-opacity': 1,
+              'fill-outline-color': '#3288bd'
+            }
+          });
+        } else {
+          map.getSource('voronoi').setData(voronoiPolygons);
+        }
+      });
+    }).catch((err) => console.error(err));
+  }
+
+  // LoadData() {
+  //   const features = [];
+  //   // const cells = [];
+  //   const cellMap = new Map(); // store cell: loc
+  //   const trackMap = new Map(); // all tracks included in a cell
+  //   let i = 0;
+  //   let options = {};
+  //   let ttcVoronoi = [];
+  //   const data = await d3.csv('http://localhost:3000/data/bs_wz_full.csv');
+  //   data.forEach((element) => {
+  //     i++;
+  //     if (element.lon !== '' && element.lat !== '') {
+  //       const x = parseFloat(element.lon);
+  //       const y = parseFloat(element.lat);
+  //       cellMap.set(+element.cell, { lon: x, lat: y });
+  //       if (x > 120.5419 && x < 120.9817 && y > 27.904 && y < 28.075 && i < 8000) {
+  //         features.push(point([x, y]));
+  //         // cells.push(+element.cell);
+  //       }
+  //     }
+  //   });
+
+  //   ttcVoronoi = featureCollection(features);
+  //   const extent = bbox(ttcVoronoi);
+
+  //   options = {
+  //     bbox: extent
+  //   };
+
+  //   const _tracks = await d3.json('http://localhost:3000/data/count_wz_0201.json');
+  //   _tracks.map((element) => {
+  //     const firstCell = +element.points[0];
+  //     const count = +element.count;
+  //     const points = element.points.map((e) => cellMap.get(+e));
+  //     const j = { count, points };
+  //     let v = [];
+  //     if (trackMap.has(firstCell)) {
+  //       v = trackMap.get(firstCell);
+  //     }
+  //     v.push(j);
+  //     trackMap.set(firstCell, v);
+  //     return trackMap;
+  //   });
+
+  //   return voronoi(ttcVoronoi, options);
+  // }
+
+  // onClick() {
+  //   console.log(event);
+  //   // if (event.features[0].properties !== undefined) {
+  //   //   const tracks = trackMap.get(event.features[0].properties.cell);
+  //   //   console.log(tracks);
+  //   //   if (tracks === undefined || tracks.length === 0) return;
+  //   //   // show tracks
+  //   //   // let coordinateList = []
+  //   //   // tracks.forEach( elem => {
+  //   //   //     let coordinates = []
+  //   //   //     elem.points.forEach( p => {
+  //   //   //         if (p != undefined) coordinates.push([p.lon, p.lat])
+  //   //   //     })
+  //   //   //     if (coordinates.length > 0) coordinateList.push(coordinates)
+  //   //   // });
+  //   //   drawLines(event.Map, tracks);
+  //   // }
+  // };
+
+  render() {
+    const { classes } = this.props;
+    return (<div ref={(el) => { this.mapContainer = el; }} className={classes.root} />);
+  }
+}
+
+MapPage.propTypes = {
+  classes: PropTypes.object.isRequired,
+};
+
+export default withStyles(useStyles)(MapPage);
